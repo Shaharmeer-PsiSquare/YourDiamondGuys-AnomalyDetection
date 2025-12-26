@@ -1,7 +1,7 @@
 # Logs directory
 logs/
 *.log
-
+*.pid
 # Python
 __pycache__/
 *.py[cod]

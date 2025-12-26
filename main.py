@@ -284,7 +284,9 @@ def process_batch():
                     logger.debug(f"AI model response sample values: {[(k, str(v)[:50] if isinstance(v, str) else type(v).__name__) for k, v in list(result_img.items())[:5]]}")
                 
                 # Extract expected fields (matching legacy expected structure)
-                result_image_data = result_img["encode_img"].encode('utf-8')
+                # encode_img is a base64 string, decode it to get image bytes
+                import base64
+                result_image_data = base64.b64decode(result_img["encode_img"])
                 flag_center = result_img["center_flag"]
                 points = result_img["region_points"]
                 acc = result_img["acuuracy"]
@@ -405,6 +407,10 @@ def process_batch():
 if __name__ == "__main__":
     import signal
     import sys
+    
+    # Note: output.log file is managed by start.sh script
+    # The shell script deletes it before starting and redirects output via nohup
+    # We don't delete/recreate it here to avoid breaking the file descriptor connection
     
     app_start_time = time()
     logger.info("=" * 80)

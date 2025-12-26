@@ -8,6 +8,7 @@ from requests.adapters import HTTPAdapter
 from requests.packages.urllib3.util.retry import Retry
 import numpy as np
 import logging
+import os
 from time import time
 
 # Configure logger for utils module
@@ -84,12 +85,14 @@ def encodeimage(image):
 
 def get_predict_from_model(image_array):
     """
-    Get prediction from AI model API.
-    Matches legacy implementation - returns raw API response.
+    Get prediction using local inference (no API calls).
+    Returns response in the same format as the API for compatibility.
     """
-    api_start_time = time()
-    url = "http://3.225.210.139:8009/"
-    logger.info(f"Sending image to AI model API: {url}")
+    import json
+    from local_inference import prediction, encodeimage as local_encodeimage
+    
+    inference_start_time = time()
+    logger.info("Running local inference (no API call)")
     
     if image_array is None:
         logger.error("Input image_array is None - cannot process")
@@ -98,78 +101,52 @@ def get_predict_from_model(image_array):
     logger.debug(f"Input image array shape: {image_array.shape if image_array is not None else 'None'}")
     logger.debug(f"Input image array dtype: {image_array.dtype if hasattr(image_array, 'dtype') else 'N/A'}")
     
-    # Encode image array back to base64 for API (matching legacy implementation)
-    logger.debug("Encoding image for API request")
-    encode_start = time()
-    image_data = encodeimage(image_array)
-    encode_duration = time() - encode_start
-    
-    if image_data is None:
-        logger.error("Failed to encode image. Cannot proceed with API request")
-        return None
-    
-    logger.debug(f"Image encoding completed in {encode_duration:.3f}s")
-    
-    # Create request payload matching legacy format
-    files = {'encode': image_data}
-    payload_size = len(image_data)
-    logger.debug(f"Prepared API request payload. Encoded image size: {payload_size} bytes ({payload_size / 1024:.2f} KB)")
-    
     try:
-        logger.debug("Sending POST request to AI model API using session")
-        request_start = time()
-        # Use session for connection reuse
-        session = get_api_session()
-        response = session.post(url, data=files, timeout=30)
-        request_duration = time() - request_start
-        logger.debug(f"API response received. Status code: {response.status_code}, duration: {request_duration:.2f}s")
+        # Encode image to base64 for local inference
+        logger.debug("Encoding image for local inference")
+        encode_start = time()
+        image_data = local_encodeimage(image_array)
+        encode_duration = time() - encode_start
         
-        # Parse JSON response (matching legacy - no status code check before parsing)
-        try:
-            logger.debug("Parsing JSON response")
-            parse_start = time()
-            result = response.json()
-            parse_duration = time() - parse_start
-            logger.debug(f"Successfully parsed JSON response in {parse_duration:.3f}s")
-            
-            # Log response structure for debugging
-            if isinstance(result, dict):
-                logger.debug(f"Response keys: {list(result.keys())}")
-                # Log full response if it's unexpected
-                if 'encode_img' not in result:
-                    logger.warning(f"Response missing expected 'encode_img' key. Full response: {result}")
-                    logger.debug(f"Response structure: {[(k, type(v).__name__) for k, v in result.items()]}")
-            else:
-                logger.warning(f"Response is not a dictionary. Type: {type(result)}, Value: {result}")
-            
-            total_duration = time() - api_start_time
-            logger.info(f"AI model API call completed in {total_duration:.2f}s")
-            
-            # Return result directly (matching legacy behavior)
-            return result
-            
-        except ValueError as e:
-            logger.error(f"Failed to parse JSON response: {str(e)}")
-            logger.debug(f"Response status code: {response.status_code}")
-            logger.debug(f"Response content type: {response.headers.get('Content-Type', 'Unknown')}")
-            logger.debug(f"Response content (first 1000 chars): {response.text[:1000]}")
+        if image_data is None:
+            logger.error("Failed to encode image. Cannot proceed with local inference")
             return None
-            
-    except requests.exceptions.Timeout:
-        total_duration = time() - api_start_time
-        logger.error(f"Timeout while calling AI model API (30s timeout exceeded). Total time: {total_duration:.2f}s")
-        return None
-    except requests.exceptions.ConnectionError as e:
-        total_duration = time() - api_start_time
-        logger.error(f"Connection error while calling AI model API: {str(e)}. Total time: {total_duration:.2f}s")
-        return None
-    except requests.exceptions.RequestException as e:
-        total_duration = time() - api_start_time
-        logger.error(f"Request exception while calling AI model API: {str(e)}. Total time: {total_duration:.2f}s")
-        return None
+        
+        logger.debug(f"Image encoding completed in {encode_duration:.3f}s")
+        
+        # Run local inference
+        logger.debug("Running local prediction")
+        prediction_start = time()
+        encodeimg, defect_polygons, flag, center_flag, region_dict, accuracy_per, head_anomaly = prediction(
+            None, encode_flag=True, encode_image=image_data
+        )
+        prediction_duration = time() - prediction_start
+        
+        if not flag or encodeimg is None:
+            logger.error("Local inference failed or returned no result")
+            return None
+        
+        logger.debug(f"Local inference completed in {prediction_duration:.2f}s")
+        
+        # Format response to match API response structure
+        # Note: anomaly_head is serialized here, but points is kept as list for main.py processing
+        # Both will be properly serialized in database.py before insertion
+        result = {
+            "encode_img": encodeimg,
+            "center_flag": center_flag,
+            "region_points": defect_polygons,  # Keep as list for main.py to process
+            "acuuracy": accuracy_per,
+            "anomaly_head": json.dumps(head_anomaly) if head_anomaly else None  # Already JSON string
+        }
+        
+        total_duration = time() - inference_start_time
+        logger.info(f"Local inference completed in {total_duration:.2f}s")
+        
+        return result
+        
     except Exception as e:
-        total_duration = time() - api_start_time
-        logger.error(f"Unexpected error while calling AI model API: {str(e)}. Total time: {total_duration:.2f}s", exc_info=True)
+        total_duration = time() - inference_start_time
+        logger.error(f"Unexpected error during local inference: {str(e)}. Total time: {total_duration:.2f}s", exc_info=True)
         return None
 
 def create_s3_folder(bucket_name, folder_name):

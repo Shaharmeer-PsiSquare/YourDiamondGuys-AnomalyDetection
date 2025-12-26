@@ -18,3 +18,7 @@ six==1.17.0
 tqdm==4.67.1
 urllib3==2.6.2
 wheel==0.45.1
+# Local inference dependencies
+onnxruntime>=1.8.1
+scipy>=1.4.1
+shapely>=1.7.0

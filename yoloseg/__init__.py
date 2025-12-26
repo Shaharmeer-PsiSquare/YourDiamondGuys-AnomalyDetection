@@ -1,0 +1,2 @@
+from .YOLOSeg import YOLOSeg
+

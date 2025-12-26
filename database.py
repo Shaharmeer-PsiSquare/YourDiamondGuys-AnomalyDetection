@@ -7,6 +7,7 @@ import pytz
 import logging
 from time import time
 import threading
+import json
 
 # Configure logger for database module
 logger = logging.getLogger(__name__)
@@ -409,6 +410,47 @@ def batch_update_ai_processing(original_db_id, diamond_id, result_s3_link, flag_
     try:
         with conn.cursor() as cursor:
             # 1. Insert AI processing data
+            # Use psycopg2's Json adapter to explicitly mark data as JSON (not arrays)
+            # This prevents psycopg2 from trying to convert Python lists to PostgreSQL arrays
+            # which causes "multidimensional arrays must have array expressions with matching dimensions" errors
+            from psycopg2.extras import Json
+            
+            # Handle points - if it's already a JSON string, parse it first
+            if points is None:
+                points_param = None
+            elif isinstance(points, str):
+                # Already a JSON string - parse it to Python object, then wrap in Json()
+                try:
+                    points_obj = json.loads(points)
+                    points_param = Json(points_obj)
+                except json.JSONDecodeError:
+                    logger.warning(f"points is not valid JSON string, treating as None")
+                    points_param = None
+            else:
+                # It's a Python object (list, dict, etc.) - wrap directly in Json()
+                # Json() will serialize it properly and ensure PostgreSQL treats it as JSON
+                points_param = Json(points)
+            
+            # Handle anomaly_head - if it's already a JSON string, parse it first
+            if anomaly_head is None:
+                anomaly_head_param = None
+            elif isinstance(anomaly_head, str):
+                # Already a JSON string - parse it to Python object, then wrap in Json()
+                try:
+                    anomaly_head_obj = json.loads(anomaly_head)
+                    anomaly_head_param = Json(anomaly_head_obj)
+                except json.JSONDecodeError:
+                    logger.warning(f"anomaly_head is not valid JSON string, treating as None")
+                    anomaly_head_param = None
+            else:
+                # It's a Python object (dict, list, etc.) - wrap directly in Json()
+                # Json() will serialize it properly and ensure PostgreSQL treats it as JSON
+                anomaly_head_param = Json(anomaly_head)
+            
+            # Debug logging
+            logger.debug(f"Using Json adapter - points type: {type(points)}, points_param type: {type(points_param)}")
+            logger.debug(f"Using Json adapter - anomaly_head type: {type(anomaly_head)}, anomaly_head_param type: {type(anomaly_head_param)}")
+            
             insert_query = """
                 INSERT INTO public."Affiliate_app_aiprocessing" 
                 (is_processed, ai_output_image, diamond_id, center_flag, polygon_points, ai_score, anomaly_head) 
@@ -416,7 +458,7 @@ def batch_update_ai_processing(original_db_id, diamond_id, result_s3_link, flag_
                 ON CONFLICT(diamond_id) DO UPDATE SET diamond_id = EXCLUDED.diamond_id 
                 RETURNING id;
             """
-            cursor.execute(insert_query, (result_s3_link, diamond_id, flag_center, points, acc, anomaly_head))
+            cursor.execute(insert_query, (result_s3_link, diamond_id, flag_center, points_param, acc, anomaly_head_param))
             ret_id = cursor.fetchone()[0]
             logger.debug(f"Inserted AI data. AI processing ID: {ret_id}")
             
